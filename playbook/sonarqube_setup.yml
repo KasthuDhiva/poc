@@ -1,0 +1,84 @@
+---
+- hosts: Sonarqube
+  vars:
+    sonarqube_port: 9000
+    sonarqube_admin_login: "admin"
+    sonarqube_default_password: "admin"
+    sonarqube_new_password: "pass123"
+    sonarqube_project_key: "node_key"
+    sonarqube_project_name: "Node Project"
+    sonarqube_token_name: "sonar_token"
+
+  tasks:
+    - name: Wait for SonarQube to be reachable
+      ansible.builtin.wait_for:
+        host: localhost
+        port: "{{ sonarqube_port }}"
+        state: started
+        delay: 5
+        timeout: 30
+
+    - name: Check SonarQube health
+      ansible.builtin.uri:
+        url: "http://localhost:{{ sonarqube_port }}/api/system/health"
+        user: "{{ sonarqube_admin_login }}"
+        password: "{{ sonarqube_default_password }}"
+        method: GET
+        force_basic_auth: yes
+      register: health_response
+      until: health_response.status == 200 and health_response.json.health == 'GREEN'
+      retries: 20
+      delay: 5
+
+    - name: Change admin password
+      ansible.builtin.uri:
+        url: "http://localhost:{{ sonarqube_port }}/api/users/change_password"
+        method: POST
+        user: "{{ sonarqube_admin_login }}"
+        password: "{{ sonarqube_default_password }}"
+        force_basic_auth: yes
+        body: "login={{ sonarqube_admin_login }}&previousPassword={{ sonarqube_default_password }}&password={{ sonarqube_new_password }}"
+        headers:
+          Content-Type: "application/x-www-form-urlencoded"
+        status_code: [200, 204]
+      no_log: true
+
+    - name: Create SonarQube project
+      ansible.builtin.uri:
+        url: "http://localhost:{{ sonarqube_port }}/api/projects/create?project={{ sonarqube_project_key }}&name={{ sonarqube_project_name | urlencode }}"
+        user: "{{ sonarqube_admin_login }}"
+        password: "{{ sonarqube_new_password }}"
+        method: POST
+        force_basic_auth: yes
+
+    - name: Generate user token for SonarQube
+      ansible.builtin.uri:
+        url: "http://localhost:{{ sonarqube_port }}/api/user_tokens/generate"
+        user: "{{ sonarqube_admin_login }}"
+        password: "{{ sonarqube_new_password }}"
+        method: POST
+        force_basic_auth: yes
+        body: "name={{ sonarqube_token_name }}"
+        headers:
+          Content-Type: "application/x-www-form-urlencoded"
+      register: token_response
+
+    - name: Save token to a temporary file on remote
+      ansible.builtin.copy:
+        content: "{{ token_response.json.token }}"
+        dest: "/tmp/sonarqube_token.txt"
+
+    - name: Fetch token file to local machine
+      ansible.builtin.fetch:
+        src: "/tmp/sonarqube_token.txt"
+        dest: "/home/kasthuri/sonar_token.txt"  # Local path on your machine
+        flat: yes
+
+    - name: Clean up temporary token file on remote
+      ansible.builtin.file:
+        path: "/tmp/sonarqube_token.txt"
+        state: absent
+
+    - name: Output token generation result
+      debug:
+        var: token_response

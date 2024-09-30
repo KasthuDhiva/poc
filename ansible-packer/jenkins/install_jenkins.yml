@@ -1,0 +1,61 @@
+---
+- hosts: all
+  become: true 
+  tasks: 
+    - name: Update the apt package index
+      apt:
+        update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+        state: present
+
+    - name: Add Jenkins GPG key
+      apt_key:
+        url: https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+        state: present 
+
+    - name: Add Jenkins repository
+      apt_repository:
+        repo: 'deb https://pkg.jenkins.io/debian-stable binary/'
+        state: present 
+
+    - name: Install Java (Jenkins requires JDK)
+      apt: 
+        name: openjdk-11-jre
+        state: present
+
+    - name: Install Jenkins
+      apt: 
+        name: jenkins 
+        state: present 
+
+    - name: Start Jenkins service
+      service: 
+        name: jenkins 
+        state: started 
+
+    - name: Enable Jenkins to start at boot time 
+      service: 
+        name: jenkins 
+        enabled: yes 
+
+    - name: Install and configure Apache
+      apt:
+        update_cache: yes
+
+    - name: Install Apache2
+      apt:
+        name: apache2
+        state: present
+
+    - name: Ensure Apache is enabled and started
+      systemd:
+        name: apache2
+        enabled: yes
+        state: started

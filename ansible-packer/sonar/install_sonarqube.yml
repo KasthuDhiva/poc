@@ -1,0 +1,95 @@
+---
+- name: Install and configure SonarQube and Sonar Scanner
+  hosts: all
+  become: true
+  tasks:
+    - name: Update and upgrade APT packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Install OpenJDK 17 and wget
+      apt:
+        name:
+          - openjdk-17-jdk
+          - wget
+        state: present
+
+    - name: Download and extract SonarQube
+      shell: |
+        wget https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-9.9.0.65466.zip
+        sudo apt-get install -y unzip
+        sudo unzip sonarqube-9.9.0.65466.zip -d /opt
+      args:
+        creates: /opt/sonarqube-9.9.0.65466
+
+    - name: Create SonarQube user and group
+      shell: |
+        sudo groupadd sonar || true
+        sudo useradd -d /opt/sonarqube -g sonar sonar || true
+        sudo chown -R sonar:sonar /opt/sonarqube-9.9.0.65466
+      args:
+        creates: /opt/sonarqube
+
+    - name: Create symbolic link for SonarQube
+      file:
+        src: /opt/sonarqube-9.9.0.65466
+        dest: /opt/sonarqube
+        state: link
+
+    - name: Create SonarQube systemd service file using shell
+      shell: |
+        echo '[Unit]' | sudo tee /etc/systemd/system/sonarqube.service
+        echo 'Description=SonarQube service' | sudo tee -a /etc/systemd/system/sonarqube.service
+        echo 'After=network.target' | sudo tee -a /etc/systemd/system/sonarqube.service
+        echo '[Service]' | sudo tee -a /etc/systemd/system/sonarqube.service
+        echo 'Type=forking' | sudo tee -a /etc/systemd/system/sonarqube.service
+        echo 'ExecStart=/opt/sonarqube/bin/linux-x86-64/sonar.sh start' | sudo tee -a /etc/systemd/system/sonarqube.service
+        echo 'ExecStop=/opt/sonarqube/bin/linux-x86-64/sonar.sh stop' | sudo tee -a /etc/systemd/system/sonarqube.service
+        echo 'User=sonar' | sudo tee -a /etc/systemd/system/sonarqube.service
+        echo 'Group=sonar' | sudo tee -a /etc/systemd/system/sonarqube.service
+        echo 'LimitNOFILE=65536' | sudo tee -a /etc/systemd/system/sonarqube.service
+        echo 'LimitNPROC=4096' | sudo tee -a /etc/systemd/system/sonarqube.service
+        echo 'Restart=always' | sudo tee -a /etc/systemd/system/sonarqube.service
+        echo '[Install]' | sudo tee -a /etc/systemd/system/sonarqube.service
+        echo 'WantedBy=multi-user.target' | sudo tee -a /etc/systemd/system/sonarqube.service
+      args:
+        creates: /etc/systemd/system/sonarqube.service
+
+    - name: Reload systemd and enable SonarQube service
+      shell: |
+        sudo systemctl daemon-reload
+        sudo systemctl enable sonarqube
+
+    - name: Start SonarQube service
+      shell: |
+        sudo systemctl start sonarqube
+      register: sonarqube_start_result
+      ignore_errors: true
+
+    - name: Check SonarQube service status
+      shell: |
+        sudo systemctl status sonarqube
+      when: sonarqube_start_result.rc != 0
+
+    - name: Download and extract SonarQube Scanner
+      shell: |
+        wget https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-4.7.0.2747-linux.zip
+        sudo unzip sonar-scanner-cli-4.7.0.2747-linux.zip -d /opt
+      args:
+        creates: /opt/sonar-scanner-4.7.0.2747-linux
+
+    - name: Create symbolic link for SonarQube Scanner
+      file:
+        src: /opt/sonar-scanner-4.7.0.2747-linux
+        dest: /opt/sonar-scanner
+        state: link
+
+    - name: Update PATH for Sonar Scanner
+      shell: |
+        echo 'export PATH=$PATH:/opt/sonar-scanner/bin' | sudo tee -a /etc/profile
+        . /etc/profile
+
+    - name: Verify SonarQube Scanner installation
+      shell: |
+        /opt/sonar-scanner/bin/sonar-scanner -v
