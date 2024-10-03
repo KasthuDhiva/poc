@@ -51,23 +51,27 @@ module "sonarqube" {
 resource "local_file" "inventory_ini" {
   content = <<EOT
 [Jenkins]
-jenkins_server ansible_host=${module.jenkins.ec2_public_ip} ansible_user=ubuntu ansible_ssh_private_key_file=/home/kasthuri/poc4.pem
+jenkins_server ansible_host=${module.jenkins.ec2_public_ip} public_ip=${module.jenkins.ec2_public_ip} ansible_user=ubuntu ansible_ssh_private_key_file=/home/kasthuri/poc4.pem
 
 [Sonarqube]
-sonarqube_server ansible_host=${module.sonarqube.ec2_public_ip} ansible_user=ubuntu ansible_ssh_private_key_file=/home/kasthuri/poc4.pem
+sonarqube_server ansible_host=${module.sonarqube.ec2_public_ip} public_ip=${module.sonarqube.ec2_public_ip} ansible_user=ubuntu ansible_ssh_private_key_file=/home/kasthuri/poc4.pem
 EOT
 
   filename = "${path.module}/playbook/inventory.ini"
 }
+
 # Run Ansible Playbook after generating the inventory file
 resource "null_resource" "run_sonarqube_playbooks" {
   provisioner "local-exec" {
     command = <<-EOT
-      ansible-playbook -i ${path.module}/playbook/inventory.ini ${path.module}/playbook/sonarqube_setup.yml -e "ansible_ssh_common_args='-o StrictHostKeyChecking=no'"
+      bash -c "ansible-playbook -i ${path.module}/playbook/inventory.ini ${path.module}/playbook/sonarqube_setup.yml -e 'ansible_ssh_common_args=\"-o StrictHostKeyChecking=no\"'"
     EOT
   }
 
-  depends_on = [local_file.inventory_ini]  # Ensure inventory is created before running playbooks
+  depends_on = [
+    local_file.inventory_ini,
+    module.sonarqube  # Ensure SonarQube instance is created before running the playbook
+  ]
 }
 
 resource "null_resource" "run_jenkins_playbooks" {
@@ -76,5 +80,10 @@ resource "null_resource" "run_jenkins_playbooks" {
       bash -c "ansible-playbook -i ${path.module}/playbook/inventory.ini ${path.module}/playbook/jenkins_setup.yml -e 'ansible_ssh_common_args=\"-o StrictHostKeyChecking=no\"'"
     EOT
   }
-  depends_on = [local_file.inventory_ini, null_resource.run_sonarqube_playbooks]
+
+  depends_on = [
+    local_file.inventory_ini,
+    module.jenkins,  # Ensure Jenkins instance is created before running the playbook
+    null_resource.run_sonarqube_playbooks  # Ensure SonarQube playbook runs before Jenkins playbook
+  ]
 }

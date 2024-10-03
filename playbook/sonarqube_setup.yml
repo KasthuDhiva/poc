@@ -2,35 +2,39 @@
 - hosts: Sonarqube
   vars:
     sonarqube_port: 9000
-    sonarqube_admin_login: "admin"
-    sonarqube_default_password: "admin"
-    sonarqube_new_password: "pass123"
-    sonarqube_project_key: "node_key"
-    sonarqube_project_name: "Node Project"
-    sonarqube_token_name: "sonar_token"
+    sonarqube_default_password: "admin"  # Default password after SonarQube installation
+    sonarqube_new_password: "pass123"  # New password for the admin user
+    sonarqube_admin_login: "admin"  # Username for SonarQube admin
+    sonarqube_project_key: "poc4"
+    sonarqube_project_name: "ansible_jenkins"
+    sonarqube_token_name: "poc4"
+    quality_gate_name: "Sonar way"  # Name of the quality gate
+    jenkins_credentials_file: "/credentials.txt"  # Path to store Jenkins credentials
 
   tasks:
-    - name: Wait for SonarQube to be reachable
+    - name: Wait until SonarQube Container is reachable via TCP/IP
       ansible.builtin.wait_for:
         host: localhost
         port: "{{ sonarqube_port }}"
         state: started
         delay: 5
+        connect_timeout: 15
         timeout: 30
 
-    - name: Check SonarQube health
+    - name: Check if SonarQube is healthy
       ansible.builtin.uri:
         url: "http://localhost:{{ sonarqube_port }}/api/system/health"
         user: "{{ sonarqube_admin_login }}"
         password: "{{ sonarqube_default_password }}"
         method: GET
         force_basic_auth: yes
-      register: health_response
-      until: health_response.status == 200 and health_response.json.health == 'GREEN'
+      register: response
+      until: response.status == 200 and response.json.health == 'GREEN'
       retries: 20
       delay: 5
 
-    - name: Change admin password
+    # Step to change the default SonarQube admin password
+    - name: Change the default SonarQube admin password
       ansible.builtin.uri:
         url: "http://localhost:{{ sonarqube_port }}/api/users/change_password"
         method: POST
@@ -41,17 +45,23 @@
         headers:
           Content-Type: "application/x-www-form-urlencoded"
         status_code: [200, 204]
-      no_log: true
+      register: change_password_response
+      until: change_password_response.status in [200, 204]
+      retries: 5
+      delay: 5
+      no_log: false
 
-    - name: Create SonarQube project
+    #Continue with project creation, token generation, etc.
+    - name: Create a new project in SonarQube
       ansible.builtin.uri:
         url: "http://localhost:{{ sonarqube_port }}/api/projects/create?project={{ sonarqube_project_key }}&name={{ sonarqube_project_name | urlencode }}"
         user: "{{ sonarqube_admin_login }}"
         password: "{{ sonarqube_new_password }}"
         method: POST
         force_basic_auth: yes
+      register: project_response
 
-    - name: Generate user token for SonarQube
+    - name: Generate user token
       ansible.builtin.uri:
         url: "http://localhost:{{ sonarqube_port }}/api/user_tokens/generate"
         user: "{{ sonarqube_admin_login }}"
@@ -62,23 +72,37 @@
         headers:
           Content-Type: "application/x-www-form-urlencoded"
       register: token_response
+    
+    - name: Set the default quality gate
+      ansible.builtin.uri:
+        url: "http://localhost:{{ sonarqube_port }}/api/qualitygates/set_as_default"
+        user: "{{ sonarqube_admin_login }}"
+        password: "{{ sonarqube_new_password }}"
+        method: POST
+        force_basic_auth: yes
+        body: "name={{ quality_gate_name | urlencode }}"
+        headers:
+          Content-Type: "application/x-www-form-urlencoded"
+      register: quality_gate_response
+      failed_when: quality_gate_response.status not in [200, 204]
 
-    - name: Save token to a temporary file on remote
-      ansible.builtin.copy:
-        content: "{{ token_response.json.token }}"
-        dest: "/tmp/sonarqube_token.txt"
+    # Store SonarQube credentials as a JSON file on the Ansible control machine
+    - name: Store SonarQube credentials as a JSON file on the Ansible control machine
+      delegate_to: localhost
+      copy:
+        dest: "/home/kasthuri/poc/poc-four/sonarqube_credentials.json"
+        content: |
+          {
+            "SONAR_PROJECT_KEY": "{{ sonarqube_project_key }}",
+            "SONAR_TOKEN": "{{ token_response.json.token }}",
+            "SONARQUBE_URL": "{{ hostvars[inventory_hostname]['public_ip'] }}"  
+          }
+        mode: '0644'
 
-    - name: Fetch token file to local machine
-      ansible.builtin.fetch:
-        src: "/tmp/sonarqube_token.txt"
-        dest: "/home/kasthuri/sonar_token.txt"  # Local path on your machine
-        flat: yes
+    - name: Load SonarQube credentials from JSON file
+      set_fact:
+        sonarqube_credentials: "{{ lookup('file', '/home/kasthuri/poc/poc-four/sonarqube_credentials.json') | from_json }}"
 
-    - name: Clean up temporary token file on remote
-      ansible.builtin.file:
-        path: "/tmp/sonarqube_token.txt"
-        state: absent
-
-    - name: Output token generation result
+    - name: Use the SonarQube project key and token
       debug:
-        var: token_response
+        msg: "Project Key: {{ sonarqube_credentials.SONAR_PROJECT_KEY }}, Token: {{ sonarqube_credentials.SONAR_TOKEN }}"
